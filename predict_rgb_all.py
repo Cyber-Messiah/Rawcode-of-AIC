@@ -11,6 +11,28 @@ import re
 import time
 
 
+<<<<<<< HEAD
+=======
+def build_messages(image, query):
+    return [{'role': 'user', 'content': [
+        {'type': 'image', 'image': image},
+        {'type': 'text', 'text':
+         'Locate a single instance that matches the following description: ' + query},
+    ]}]
+
+
+def answer_to_text(answer, tokenizer):
+    if isinstance(answer, str):
+        return answer
+    if isinstance(answer, (tuple, list)) and answer:
+        return answer_to_text(answer[0], tokenizer)
+    import torch
+    if isinstance(answer, torch.Tensor):
+        return tokenizer.batch_decode(answer, skip_special_tokens=False)[0]
+    return str(answer)
+
+
+>>>>>>> 4422ab0 (only maintain the core code)
 def atomic_json(path, value):
     tmp = path.with_suffix(path.suffix + '.tmp')
     with tmp.open('w', encoding='utf-8') as f:
@@ -120,7 +142,10 @@ def make_predictor(args):
     import torch
     from PIL import Image
     from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
+<<<<<<< HEAD
     from predict_locany_competition import build_messages, answer_to_text
+=======
+>>>>>>> 4422ab0 (only maintain the core code)
 
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA is unavailable in this Python environment.')

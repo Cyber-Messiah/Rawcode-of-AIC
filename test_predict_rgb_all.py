@@ -5,10 +5,20 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from predict_rgb_all import parse_box, read_progress, run_rows
+from predict_rgb_all import answer_to_text, build_messages, parse_box, read_progress, run_rows
 
 
 class RunnerTests(unittest.TestCase):
+    def test_model_input_and_output_contract(self):
+        image = object()
+        messages = build_messages(image, 'red car')
+        self.assertIs(messages[0]['content'][0]['image'], image)
+        self.assertEqual(messages[0]['content'][1]['text'],
+                         'Locate a single instance that matches the following description: red car')
+        text = '<box><100><200><300><400></box>'
+        for result in (text, [text], (text, [], {'stats': 1}), ([text], [])):
+            self.assertEqual(answer_to_text(result, None), text)
+
     def test_parse(self):
         self.assertEqual(parse_box('<box><100> <200><300><400></box>'), [.1, .2, .3, .4])
         self.assertEqual(parse_box('<box>(100,200,300,400)</box>'), [.1, .2, .3, .4])
