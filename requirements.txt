@@ -1,0 +1,18 @@
+# RGB inference, Linux x86_64 / Python 3.10 or 3.11.
+# Install CUDA wheels FIRST (see RGB_RUN.md); these pins preserve that pairing.
+torch==2.6.0
+torchvision==0.21.0
+transformers==4.57.1
+peft==0.17.1
+accelerate==1.10.1
+numpy==1.25.0
+Pillow==11.1.0
+opencv-python-headless==4.11.0.86
+decord==0.6.0
+lmdb==1.7.5
+safetensors==0.6.2
+huggingface-hub==0.35.3
+tokenizers==0.22.1
+requests==2.32.5
+packaging==25.0
+# No flash-attn, MagiAttention, deepspeed or training-only dependencies needed.
