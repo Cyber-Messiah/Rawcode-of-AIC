@@ -55,6 +55,23 @@ class PredictionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 find_queries(root, None)
 
+    def test_images_symlink_outside_data_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / 'dataset'
+            image_dir = parent / 'images' / 'visible'
+            root.mkdir()
+            image_dir.mkdir(parents=True)
+            (image_dir / 'a.png').write_bytes(b'image')
+            try:
+                (root / 'Images').symlink_to(image_dir.parent, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f'Symlinks unavailable: {exc}')
+            (root / 'queries.json').write_text(json.dumps({
+                'a': {'query': 'x', 'visible': 'Images/visible/a.png'}
+            }), encoding='utf-8')
+            self.assertEqual(len(validate_inputs(root / 'queries.json', root)), 1)
+
     def test_torn_progress_record(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'predictions.jsonl'
