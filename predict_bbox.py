@@ -80,8 +80,9 @@ def validate_inputs(queries_path, data_root):
         relative = item.get('visible')
         if not isinstance(relative, str):
             raise ValueError(f'{key}: missing visible image path')
-        image = (data_root / relative).resolve()
-        if Path(relative).is_absolute() or not image.is_relative_to(data_root) or not image.is_file():
+        image_path = Path(relative)
+        if (image_path.is_absolute() or '..' in image_path.parts
+                or not (data_root / image_path).is_file()):
             raise ValueError(f'{key}: missing or unsafe visible image: {relative}')
     return list(queries.items())
 
