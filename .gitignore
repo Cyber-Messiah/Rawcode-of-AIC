@@ -1,8 +1,3 @@
 __pycache__/
-<<<<<<< HEAD
-=======
 *.py[cod]
 .venv/
-__pycache__/
->>>>>>> 4422ab0 (only maintain the core code)
-*.pyc

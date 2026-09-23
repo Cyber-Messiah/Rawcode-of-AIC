@@ -8,11 +8,10 @@ import math
 import os
 from pathlib import Path
 import re
+import random
 import time
 
 
-<<<<<<< HEAD
-=======
 def build_messages(image, query):
     return [{'role': 'user', 'content': [
         {'type': 'image', 'image': image},
@@ -32,7 +31,6 @@ def answer_to_text(answer, tokenizer):
     return str(answer)
 
 
->>>>>>> 4422ab0 (only maintain the core code)
 def atomic_json(path, value):
     tmp = path.with_suffix(path.suffix + '.tmp')
     with tmp.open('w', encoding='utf-8') as f:
@@ -142,10 +140,6 @@ def make_predictor(args):
     import torch
     from PIL import Image
     from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
-<<<<<<< HEAD
-    from predict_locany_competition import build_messages, answer_to_text
-=======
->>>>>>> 4422ab0 (only maintain the core code)
 
     if not torch.cuda.is_available():
         raise RuntimeError('CUDA is unavailable in this Python environment.')
@@ -170,8 +164,12 @@ def make_predictor(args):
             inputs = generated = None
             try:
                 # Retry parse failures with AR decoding; lower image budget after OOM.
-                seed = args.seed + int(hashlib.sha256(key.encode()).hexdigest()[:8], 16) + attempt
+                if getattr(args, 'seed_scheme', 'id_hash') == 'original_index':
+                    seed = args.seed + args.sample_indices[key] * 1009 + attempt
+                else:
+                    seed = args.seed + int(hashlib.sha256(key.encode()).hexdigest()[:8], 16) + attempt
                 torch.manual_seed(seed)
+                random.seed(seed)
                 np.random.seed(seed % (2 ** 32))
                 with Image.open(args.data_root / item['visible']) as source:
                     rgb = source.convert('RGB')
@@ -185,8 +183,10 @@ def make_predictor(args):
                         input_ids=inputs['input_ids'].cuda(), attention_mask=inputs['attention_mask'].cuda(),
                         image_grid_hws=torch.as_tensor(inputs['image_grid_hws'], device='cuda'),
                         tokenizer=tokenizer, use_cache=True, max_new_tokens=args.max_new_tokens,
-                        generation_mode='hybrid' if attempt == 0 else 'slow',
-                        do_sample=False, temperature=1.0)
+                        generation_mode=getattr(args, 'generation_mode', 'hybrid') if attempt == 0 else getattr(args, 'retry_generation_mode', 'slow'),
+                        do_sample=(getattr(args, 'temperature', 1.0) if attempt == 0 else getattr(args, 'retry_temperature', getattr(args, 'temperature', 1.0))) > 0,
+                        temperature=getattr(args, 'temperature', 1.0) if attempt == 0 else getattr(args, 'retry_temperature', getattr(args, 'temperature', 1.0)),
+                        top_p=getattr(args, 'top_p', 1.0))
                 answer = answer_to_text(generated, tokenizer)
                 box = parse_box(answer)
                 if box:
@@ -209,14 +209,13 @@ def make_predictor(args):
 
 
 def main():
-    root = Path(__file__).resolve().parents[2]
-    datasets = list((root / 'LocateAnything_Competition').glob('*/queries/queries.json'))
-    default_annotation = datasets[0] if len(datasets) == 1 else None
+    root = Path(__file__).resolve().parents[1]
+    default_annotation = root / 'datasets' / 'reference_subset' / 'queries.json'
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--annotation', type=Path, default=default_annotation)
     p.add_argument('--data-root', type=Path)
     p.add_argument('--model-path', default=str(root / 'LocateAnything-3B'))
-    p.add_argument('--output-dir', type=Path, default=root / 'outputs' / 'rgb_all')
+    p.add_argument('--output-dir', type=Path, default=root / 'outputs' / 'rgb_reference')
     p.add_argument('--limit', type=int, default=0, help='0 = all queries')
     p.add_argument('--image-token-limit', type=int, default=4096)
     p.add_argument('--max-new-tokens', type=int, default=128)
@@ -229,7 +228,10 @@ def main():
         p.error('Specify --annotation')
     if args.limit < 0 or args.retries < 0 or min(args.save_every, args.max_new_tokens, args.image_token_limit) < 1:
         p.error('Invalid numeric arguments')
-    args.data_root = (args.data_root or args.annotation.parent.parent).resolve()
+    inferred_root = args.annotation.parent
+    if not (inferred_root / 'Images').is_dir() and inferred_root.name == 'queries':
+        inferred_root = inferred_root.parent
+    args.data_root = (args.data_root or inferred_root).resolve()
     source = args.annotation.read_bytes()
     data = json.loads(source)
     if not isinstance(data, dict) or not data:
