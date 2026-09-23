@@ -55,3 +55,52 @@ python seed_sweep.py --original-rgb --seeds 42 43 \
 原始顺序计算随机种子。统计文件仅保留各轮和跨轮指标，不保留逐题预测。
 
 测试：`python -m unittest discover -p 'test_*.py'`。
+
+## 序数子集与官方多框拼图实验
+
+此分支新增独立实验，不修改 `predict_rgb_all.py` 和 `evaluate.py` 的原有行为。
+从仓库目录执行；以下路径对应本地 `D:\AICamp` 布局，Linux 上可换成自己的绝对路径。
+
+先筛选**恰好一个英文序数词和一个明确的左右方向**的有答案题；
+同时含上下排序方向的复合题排除。当前参考集筛出 192/1827 题，112 张 RGB 图。
+输出只有 JSON，图片仍从 `../datasets/reference_subset` 读取。
+
+```bash
+python prepare_ordinal_subset.py
+```
+
+检查 `../datasets/ordinal_subset/parsed_ordinals.json` 中自动提取的 `target`。
+该文件供人工检查；`queries.json` 不含答案，`annotations.json` 含人工 bbox。
+
+复用原有 A 基线预测和算分脚本，先做仅检查输入，再预测并评估：
+
+```bash
+python predict_rgb_all.py --annotation ../datasets/ordinal_subset/queries.json --data-root ../datasets/reference_subset --model-path ../LocateAnything-3B --output-dir ../outputs/ordinal_a --check-only
+python predict_rgb_all.py --annotation ../datasets/ordinal_subset/queries.json --data-root ../datasets/reference_subset --model-path ../LocateAnything-3B --output-dir ../outputs/ordinal_a --image-token-limit 4096
+python evaluate.py --predictions ../outputs/ordinal_a/queries_rgb.json --references ../datasets/ordinal_subset/annotations.json --output-dir ../outputs/ordinal_a/evaluation
+```
+
+RTX 5060 上可先用独立目录 `--output-dir ../outputs/ordinal_a_pilot --limit 3`
+并加 `--image-token-limit 1024` 做小规模逻辑测试。改变图像预算后应换输出目录；4096 与此前 25600 预算的实验
+不可直接比较分数。8GB 显存可能仍不足以完整加载 BF16 基座和缓存。
+
+F 使用官方多实例提示 `Locate all the instances that match the following description: ...`，
+解析返回的**全部** bbox；不再枚举单框提示。其流程是：去除含至少两个独立子框
+的大框、IoU 去重、按原图水平位置排序、裁剪并等高拼接、再用单实例提示在拼图
+中选择。`--check-only` 不加载模型。先试跑，再在独立目录跑整个序数子集：
+
+```bash
+python experiment_f_official_multi.py --check-only
+python experiment_f_official_multi.py --limit 3 --image-token-limit 1024 --output-dir ../outputs/ordinal_f_pilot
+python experiment_f_official_multi.py --output-dir ../outputs/ordinal_f_official_multi --baseline-predictions ../outputs/ordinal_a/queries_rgb.json
+```
+
+本地试跑可加 `--image-token-limit 1024` 降低图像预算；正式对比 A/F 时务必让
+两者使用相同预算。F 的 `--multi-max-new-tokens` 默认为 2048，可调高以避免多框
+输出截断。其 `predictions.jsonl` 保留原始模型回答、全部候选框及各过滤阶段；
+`puzzles/` 中绿色边框表示与 GT 匹配的候选，红色表示所选候选；
+`per_query.csv` 和 `summary.json` 给出 F IoU、Acc@0.5、各阶段 GT 覆盖以及可选的
+A/F 对错交叉统计。`queries_f.json` 仅收录成功预测的框，可再用 `evaluate.py`
+独立核对分数。所有失败和缺失均按参考题总数计 0，不会偷用 GT 选择候选。
+若只需对照已有的全量 A 预测，可把 `--baseline-predictions` 指向原来的
+`../outputs/rgb_all/queries_rgb.json`；记录并比较两边实际使用的图像预算。
