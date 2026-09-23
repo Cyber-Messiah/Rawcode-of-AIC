@@ -1,5 +1,5 @@
 # RGB inference on RTX 6000D (Blackwell), Linux x86_64 / Python 3.10 or 3.11.
-# Install the CUDA 12.8 wheels FIRST as shown in ../README.md.
+# Install the CUDA 12.8 wheels FIRST as shown in README.md.
 torch==2.10.0
 torchvision==0.25.0
 transformers==4.57.1

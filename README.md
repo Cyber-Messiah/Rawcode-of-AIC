@@ -1,11 +1,12 @@
-# 初赛：人工参考集上的 RGB 预测与评估
+# LocateAnything 复赛 RGB bbox 预测
 
-本分支保留初赛 1827 道有人工 bbox 的题目所用流程。数据和 LocateAnything-3B
-基座模型需自行准备，不提交到仓库。脚本支持显式传入路径。
+`main` 用于复赛全量题目生成 bbox。数据集和 LocateAnything-3B 基座模型不在
+此仓库内，由使用者通过命令行提供路径。初赛有人工参考答案的预测、算分和多种子
+统计保存在 `preliminary-reference-eval` 分支。
 
-## RTX 6000D 环境
+## 环境：RTX 6000D
 
-建议 Linux、Python 3.10 或 3.11，在仓库目录运行：
+在 Linux、Python 3.10 或 3.11 环境中，从本仓库目录执行：
 
 ```bash
 python3 -m venv .venv
@@ -17,41 +18,70 @@ python -m pip check
 python -c "import torch; assert torch.cuda.is_available(); x=torch.ones((16,16),device='cuda',dtype=torch.bfloat16); assert float((x@x)[0,0])==16; print(torch.__version__,torch.version.cuda,torch.cuda.get_device_name(0))"
 ```
 
-## 预测与算分
+最后一条会实际在显卡上计算，避免旧 PyTorch 虽能导入却无法运行新显卡。
+`nvidia-smi` 应能识别 RTX 6000D；驱动不兼容时需要更新驱动。
+推理使用 SDPA，无需安装 FlashAttention 或 MagiAttention。
 
-下面示例假定数据位于仓库相邻的 `datasets/reference_subset`，模型位于相邻的
-`LocateAnything-3B`。`queries.json` 无 bbox，`annotations.json` 是人工参考答案。
+## 数据格式
 
-```bash
-python predict_rgb_all.py \
-  --annotation ../datasets/reference_subset/queries.json \
-  --data-root ../datasets/reference_subset \
-  --model-path ../LocateAnything-3B \
-  --output-dir ../outputs/rgb_reference \
-  --image-token-limit 25600
+传入包含图片目录的 `--data-root`，例如：
 
-python evaluate.py \
-  --predictions ../outputs/rgb_reference/queries_rgb.json \
-  --references ../datasets/reference_subset/annotations.json
+```text
+/path/to/final_dataset/
+  Images/visible/...
+  Images/infrared/...
+  Images/depth/...
+  queries/queries.json
 ```
 
-预测逐条保存，可用相同命令续跑。`summary.json` 的 `complete: true` 才代表
-本组题目全部生成有效框；`failures.json` 记录需要重试或人工检查的题目。
-评估按 ID 对齐，输出平均 IoU、Acc@0.5 等指标和逐题明细。
+也接受根目录下的 `queries.json`；其他位置可用 `--queries` 指定。
+JSON 根节点是按题目 ID 索引的对象。每条至少包含 `visible` 和 `query`；
+输出会保留原有字段（包括 `infrared`、`depth`），增加归一化
+`bbox: [x1, y1, x2, y2]`。模型只读取 RGB，红外和深度不参与推理。
 
-复现最初恢复的初赛脚本参数时可运行：
+## 运行
+
+以下命令在仓库目录执行。**请把占位路径换成实际位置**；数据目录和模型目录
+不必在仓库内。先检查输入，再用独立目录做少量试跑，最后跑全量：
 
 ```bash
-python seed_sweep.py --original-rgb --seeds 42 43 \
-  --annotation ../datasets/reference_subset/queries.json \
-  --references ../datasets/reference_subset/annotations.json \
-  --data-root ../datasets/reference_subset \
-  --full-queries ../datasets/full/queries.json \
-  --model-path ../LocateAnything-3B \
-  --output-dir ../outputs/seed_sweep_original_rgb
+python predict_bbox.py \
+  --data-root /path/to/final_dataset \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/check_only \
+  --check-only
+
+python predict_bbox.py \
+  --data-root /path/to/final_dataset \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/pilot_output \
+  --limit 10
+
+python predict_bbox.py \
+  --data-root /path/to/final_dataset \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/final_output
 ```
 
-该模式使用 25600 图像预算、temperature 0.7、top-p 0.9，并按全量初赛题目的
-原始顺序计算随机种子。统计文件仅保留各轮和跨轮指标，不保留逐题预测。
+默认使用初赛恢复脚本的 RGB 生成参数：图像 patch 预算 25600、hybrid 解码、
+temperature 0.7、top-p 0.9、最多一次 temperature 0.2 的重试。
+随机种子默认 42，并按原始题目顺序设定逐题种子。
+如果大图显存不足，程序会在该题重试时降低图像预算；可用
+`--image-token-limit` 明确设置全局预算。
+
+每条结果同步保存到 `predictions.jsonl`，重启同一命令时跳过已成功题目，
+重新处理失败题目。`predictions_valid.json` 只含有效模型框；`failures.json`
+记录失败原因；`summary.json` 给出成功、失败及待处理数量。
+只有 `summary.json` 中 `submission_ready: true` 时，才会写
+`submission_complete.json`。此时它包含当前运行的全部题目，格式可用于提交。
+正常全量运行还应检查 `total_queries` 与复赛题目数一致、`complete: true`、
+`fallback_boxes: 0`。试跑的 `--limit 10` 应使用单独输出目录，以免误提交。
+
+少量题目持续无法解析出 bbox 时，先查看 `failures.json`。如果必须生成
+包含所有题目的文件，可在原命令后加 `--fallback-full-image` 并使用**相同输出目录**
+重试失败项：最终仍失败的题目会使用 `[0,0,1,1]`，
+数量记录在 `fallback_boxes`。这种框通常质量很差，应优先重试或检查原始回答。
+改变模型、数据或生成参数时必须换输出目录，以免混入旧结果。
+输出目录有 `run.lock` 时表示有进程占用；强制终止后确认旧进程已停止再移除锁。
 
 测试：`python -m unittest discover -p 'test_*.py'`。
