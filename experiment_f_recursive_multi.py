@@ -25,9 +25,10 @@ from prepare_ordinal_subset import parse_ordinal
 from prepare_reference_subset import load_json, sha256, valid_box
 
 
-def suspicious_parent(boxes, single_area=0.05, multi_area=0.015,
+def suspicious_parent(boxes, single_area=0.10, multi_area=0.10,
                       relative_area=1.75, baseline_box=None,
-                      a_area_ratio=3.0, a_containment=0.9):
+                      a_area_ratio=3.0, a_containment=0.9,
+                      a_min_area=0.02):
     """Return (index, reasons) for the largest box, or (None, []).
 
     All areas are fractions of the current input image. The A comparison is
@@ -44,6 +45,7 @@ def suspicious_parent(boxes, single_area=0.05, multi_area=0.015,
     elif area(largest) >= multi_area and area(largest) / area(boxes[ordered[1]]) >= relative_area:
         reasons.append('relative_area_outlier')
     if (baseline_box is not None and valid_box(baseline_box)
+            and area(largest) >= a_min_area
             and intersection(largest, baseline_box) / area(baseline_box) >= a_containment
             and area(largest) / area(baseline_box) >= a_area_ratio):
         reasons.append('encloses_smaller_a_box')
@@ -168,11 +170,15 @@ def infer_one(key, item, baseline_box, args, model, tokenizer, processor):
         a_box = baseline_box if depth == 1 else None
         index, reasons = suspicious_parent(
             current_local, args.single_area_threshold, args.multi_area_threshold,
-            args.relative_area_ratio, a_box, args.a_area_ratio, args.a_containment)
+            args.relative_area_ratio, a_box, args.a_area_ratio, args.a_containment,
+            args.a_min_area_threshold)
         if index is None:
             break
         local_parent = current_local[index]
         parent = map_from_crop(local_parent, current_bounds, image.size)
+        # A crop can make a small original-image box look large locally.
+        if depth > 1 and area(parent) < args.recursive_global_area_threshold:
+            break
         crop, bounds = crop_region(image, parent, args.crop_padding)
         step = dict(depth=depth, reasons=reasons, parent=parent,
                     crop_bounds=list(bounds), crop_size=list(crop.size),
@@ -302,11 +308,13 @@ def main():
     parser.add_argument('--gap', type=int, default=12)
     parser.add_argument('--max-puzzle-width', type=int, default=1536)
     parser.add_argument('--max-depth', type=int, default=3)
-    parser.add_argument('--single-area-threshold', type=float, default=0.05)
-    parser.add_argument('--multi-area-threshold', type=float, default=0.015)
+    parser.add_argument('--single-area-threshold', type=float, default=0.10)
+    parser.add_argument('--multi-area-threshold', type=float, default=0.10)
     parser.add_argument('--relative-area-ratio', type=float, default=1.75)
     parser.add_argument('--a-area-ratio', type=float, default=3.0)
     parser.add_argument('--a-containment', type=float, default=0.9)
+    parser.add_argument('--a-min-area-threshold', type=float, default=0.02)
+    parser.add_argument('--recursive-global-area-threshold', type=float, default=0.10)
     parser.add_argument('--child-max-area-ratio', type=float, default=0.8)
     parser.add_argument('--child-min-containment', type=float, default=0.9)
     parser.add_argument('--crop-padding', type=float, default=0.02)
@@ -319,6 +327,8 @@ def main():
             or not 0 < args.single_area_threshold <= 1
             or not 0 < args.multi_area_threshold <= 1
             or args.relative_area_ratio <= 1 or args.a_area_ratio <= 1
+            or not 0 < args.a_min_area_threshold <= 1
+            or not 0 < args.recursive_global_area_threshold <= 1
             or not 0 < args.a_containment <= 1 or not 0 < args.parent_containment <= 1
             or not 0 < args.child_max_area_ratio < 1
             or not 0 < args.child_min_containment <= 1
@@ -368,7 +378,9 @@ def main():
                           'parent_min_area_ratio','dedup_iou','tile_height','gap',
                           'max_puzzle_width','max_depth','single_area_threshold',
                           'multi_area_threshold','relative_area_ratio','a_area_ratio',
-                          'a_containment','child_max_area_ratio','child_min_containment','crop_padding')})
+                          'a_containment','a_min_area_threshold',
+                          'recursive_global_area_threshold','child_max_area_ratio',
+                          'child_min_containment','crop_padding')})
         manifest = args.output_dir / 'run_config.json'
         if manifest.exists():
             if json.loads(manifest.read_text(encoding='utf-8')) != config:

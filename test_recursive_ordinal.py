@@ -20,22 +20,28 @@ def arguments(root):
                            parent_containment=.9, parent_min_children=2,
                            parent_min_area_ratio=1.5, dedup_iou=.5,
                            tile_height=40, gap=10, max_puzzle_width=200,
-                           max_depth=1, single_area_threshold=.05,
-                           multi_area_threshold=.015, relative_area_ratio=1.75,
+                           max_depth=1, single_area_threshold=.10,
+                           multi_area_threshold=.10, relative_area_ratio=1.75,
                            a_area_ratio=3, a_containment=.9,
+                           a_min_area_threshold=.02,
+                           recursive_global_area_threshold=.10,
                            child_max_area_ratio=.8, child_min_containment=.9,
                            crop_padding=0)
 
 
 class RecursiveOrdinalTests(unittest.TestCase):
     def test_calibrated_outlier_and_a_scale_triggers(self):
-        self.assertEqual(suspicious_parent([[.1, .1, .3, .4]])[0], 0)
+        self.assertEqual(suspicious_parent([[.1, .1, .5, .5]])[0], 0)
         self.assertIsNone(suspicious_parent([[.1, .1, .2, .2]])[0])
         boxes = [[0, 0, .2, .2], [.3, 0, .4, .2]]
-        self.assertEqual(suspicious_parent(boxes), (0, ['relative_area_outlier']))
-        self.assertEqual(suspicious_parent([[0, 0, .14, .14], [.3, 0, .44, .14]],
+        self.assertIsNone(suspicious_parent(boxes)[0])
+        self.assertEqual(suspicious_parent([[0, 0, .4, .4], [.5, 0, .6, .2]]),
+                         (0, ['relative_area_outlier']))
+        self.assertEqual(suspicious_parent([[0, 0, .15, .15], [.3, 0, .4, .1]],
                                            baseline_box=[.01, .01, .05, .05])[1],
                          ['encloses_smaller_a_box'])
+        self.assertIsNone(suspicious_parent([[0, 0, .1, .1]],
+                                             baseline_box=[.01, .01, .03, .03])[0])
 
     def test_crop_mapping_and_repeated_whole_crop_rejection(self):
         image = Image.new('RGB', (100, 100), 'blue')
@@ -114,6 +120,24 @@ class RecursiveOrdinalTests(unittest.TestCase):
             self.assertEqual(len(record['refinement_steps']), 3)
             self.assertEqual(record['status'], 'ok')
             self.assertLess(record['bbox'][2] - record['bbox'][0], .35)
+
+    def test_crop_does_not_retrigger_tiny_original_image_box(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Images/visible').mkdir(parents=True)
+            Image.new('RGB', (100, 100), 'white').save(root / 'Images/visible/a.png')
+            item = dict(query='The first person from left to right',
+                        visible='Images/visible/a.png')
+            args = arguments(root)
+            args.max_depth = 3
+            answers = ['<box><0><0><200><200></box>',
+                       '<box><0><0><1000><1000></box>',
+                       '<box><0><0><500><500></box>',
+                       '<box><0><0><1000><1000></box>']
+            with patch('experiment_f_recursive_multi.generate', side_effect=answers) as mocked:
+                record = infer_one('a', item, [.01, .01, .03, .03], args, None, None, None)
+            self.assertEqual(mocked.call_count, 4)
+            self.assertEqual(len(record['refinement_steps']), 1)
 
 
 if __name__ == '__main__':
