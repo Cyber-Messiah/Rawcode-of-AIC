@@ -158,8 +158,9 @@ GT/A/最终 F 对照图、第一阶段原始框、去父框后的候选、去重
 
 ## 带上下文的 F 与按序号直选的 G
 
-新版 `experiment_f_recursive_multi.py` 给拼图中的每个候选裁块增加默认 15% 的
-边缘上下文，但选中后仍返回**原始候选框**，不会把扩大的裁块当作答案框。
+新版 `experiment_f_recursive_multi.py` 给拼图中的每个候选裁块增加默认每侧
+2.5% 的边缘上下文（长宽总共扩大到原框的 1.05 倍），但选中后仍返回
+**原始候选框**，不会把扩大的裁块当作答案框。
 `--puzzle-context-padding` 可调整此比例。F 若在拼图上给出多个框，或单框明显
 横跨多个拼图块，会用“只选一个黄色边框内的块”的提示重试一次；重试仍无法
 确定单块时，按 G 规则直接选对应序号。拼图无候选或候选数不足以数到目标序号时
@@ -183,5 +184,5 @@ F 新版运行时请使用新的 `--output-dir`；完整 RGB 图像路径通过 
 python experiment_f_recursive_multi.py --ids 003810_001 002760_004 --data-root ../analysis/ordinal_recursive_gate_v2_20260924/rgb_complete --model-path ../LocateAnything-3B --baseline-predictions ../outputs/rgb_all/queries_rgb.json --output-dir ../outputs/ordinal_fg_context_pilot
 ```
 
-可用 `visualize_ordinal_stages.py --journal <新日志> --puzzle-context-padding 0.15`
+可用 `visualize_ordinal_stages.py --journal <新日志> --puzzle-context-padding 0.025`
 重建新版拼图；这个参数须与推理时一致。

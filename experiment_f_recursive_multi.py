@@ -356,7 +356,7 @@ def main():
     parser.add_argument('--tile-height', type=int, default=224)
     parser.add_argument('--gap', type=int, default=12)
     parser.add_argument('--max-puzzle-width', type=int, default=1536)
-    parser.add_argument('--puzzle-context-padding', type=float, default=0.15)
+    parser.add_argument('--puzzle-context-padding', type=float, default=0.025)
     parser.add_argument('--multi-tile-overlap', type=float, default=0.25)
     parser.add_argument('--max-depth', type=int, default=3)
     parser.add_argument('--single-area-threshold', type=float, default=0.10)

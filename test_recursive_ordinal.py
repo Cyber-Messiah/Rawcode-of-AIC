@@ -23,7 +23,7 @@ def arguments(root):
                            parent_containment=.9, parent_min_children=2,
                            parent_min_area_ratio=1.5, dedup_iou=.5,
                            tile_height=40, gap=10, max_puzzle_width=200,
-                           puzzle_context_padding=.15, multi_tile_overlap=.25,
+                           puzzle_context_padding=.025, multi_tile_overlap=.25,
                            max_depth=1, single_area_threshold=.10,
                            multi_area_threshold=.10, relative_area_ratio=1.75,
                            a_area_ratio=3, a_containment=.9,
@@ -46,11 +46,13 @@ class RecursiveOrdinalTests(unittest.TestCase):
             for y in range(40, 60):
                 image.putpixel((x, y), (0, 0, 255))
         box = [.4, .4, .6, .6]
-        tight, _, tight_used = make_puzzle(image, [box], 40, 0, 200)
-        padded, _, padded_used = make_puzzle(image, [box], 40, 0, 200, .25)
+        tight, _, tight_used = make_puzzle(image, [box], 224, 0, 300)
+        padded, _, padded_used = make_puzzle(image, [box], 224, 0, 300, .025)
         self.assertEqual(tight_used, padded_used)
-        self.assertEqual(tight.getpixel((20, 20)), (0, 0, 255))
-        self.assertEqual(padded.getpixel((4, 20)), (255, 0, 0))
+        self.assertEqual(tight.getpixel((5, 112)), (0, 0, 255))
+        red, _, blue = padded.getpixel((5, 112))
+        self.assertGreater(red, 240)
+        self.assertLess(blue, 20)
 
     def test_multi_tile_response_retry_then_g(self):
         image = Image.new('RGB', (100, 100), 'white')
