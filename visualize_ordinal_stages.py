@@ -84,11 +84,13 @@ def save_overlay(image, path, boxes):
     marked.save(path)
 
 
-def puzzle_image(image, boxes, selection, gt, path, tile_height, gap, max_width):
+def puzzle_image(image, boxes, selection, gt, path, tile_height, gap, max_width,
+                 context_padding):
     ordered = sorted(boxes, key=lambda b: (b[0] + b[2]) / 2)
     if not ordered:
         return None
-    puzzle, spans, used = make_puzzle(image, ordered, tile_height, gap, max_width)
+    puzzle, spans, used = make_puzzle(image, ordered, tile_height, gap, max_width,
+                                      context_padding)
     if puzzle is None:
         return None
     marked = puzzle.copy()
@@ -103,6 +105,8 @@ def puzzle_image(image, boxes, selection, gt, path, tile_height, gap, max_width)
         rectangle(draw, marked, tile_box, COLORS['candidate'], str(index + 1), font)
     if valid_box(selection.get('puzzle_box')):
         rectangle(draw, marked, selection['puzzle_box'], COLORS['final'], 'model', font)
+    for index, box in enumerate(selection.get('retry_puzzle_boxes') or []):
+        rectangle(draw, marked, box, COLORS['child'], f'retry {index + 1}', font)
     marked.save(path)
     return list(puzzle.size)
 
@@ -120,7 +124,8 @@ def render_case(key, record, gt, a_box, image, case_dir, args, category):
     case_dir.mkdir(parents=True, exist_ok=True)
     raw = record.get('raw_boxes') or []
     initial = record.get('original_selection') or {}
-    final = record.get('bbox') if record.get('status') in ('ok', 'fallback_a_none') else None
+    final = record.get('bbox') if record.get('status') in (
+        'ok', 'fallback_a_none', 'fallback_a_puzzle') else None
     image.save(case_dir / '00_rgb.png')
     save_overlay(image, case_dir / '01_overview.png',
                  [(a_box, COLORS['a'], 'A'), (final, COLORS['final'], 'final F'),
@@ -149,7 +154,8 @@ def render_case(key, record, gt, a_box, image, case_dir, args, category):
     save_overlay(image, case_dir / '04_after_dedup.png', candidate_draw)
     initial_size = puzzle_image(image, original, initial, gt,
                                 case_dir / '05_puzzle_initial.png', args.tile_height,
-                                args.gap, args.max_puzzle_width)
+                                args.gap, args.max_puzzle_width,
+                                args.puzzle_context_padding)
     if initial_size and initial.get('puzzle_size') and initial_size != initial['puzzle_size']:
         raise ValueError(f'{key}: reconstructed initial puzzle size differs from inference log')
 
@@ -189,7 +195,8 @@ def render_case(key, record, gt, a_box, image, case_dir, args, category):
         stage_images.append('07_refined_candidates.png')
         refined_size = puzzle_image(image, refined_boxes, refined, gt,
                                     case_dir / '08_puzzle_refined.png', args.tile_height,
-                                    args.gap, args.max_puzzle_width)
+                                    args.gap, args.max_puzzle_width,
+                                    args.puzzle_context_padding)
         if refined_size and refined.get('puzzle_size') and refined_size != refined['puzzle_size']:
             raise ValueError(f'{key}: reconstructed refined puzzle size differs from inference log')
         if refined_size:
@@ -201,7 +208,7 @@ def render_case(key, record, gt, a_box, image, case_dir, args, category):
         '02_raw_multi.png': 'F 第一阶段原始多框（蓝）；与 GT IoU 最高的原始框为黄',
         '03_after_parent.png': '去父框后的候选，保留原始输出顺序',
         '04_after_dedup.png': '进一步去重后的拼图候选（L 为从左往右编号）；初始 F 选择为红',
-        '05_puzzle_initial.png': '重建初始拼图：绿框为 IoU≥0.5 的候选，红框为模型所选，紫框为模型在拼图上的输出',
+        '05_puzzle_initial.png': '重建初始拼图：绿框为 IoU≥0.5 的候选，红框为最终选块，紫框为首次模型输出，橙框为重试输出',
         '07_refined_candidates.png': '细分后候选与重新选择的框',
         '08_puzzle_refined.png': '重建细分后拼图',
     }
@@ -215,14 +222,20 @@ def render_case(key, record, gt, a_box, image, case_dir, args, category):
                ('第一阶段原始回答', record.get('multi_answer', '')),
                ('初始拼图提示', initial.get('prompt', '')),
                ('初始拼图回答', initial.get('answer', '')),
+               ('初始拼图重试提示', initial.get('retry_prompt', '')),
+               ('初始拼图重试回答', initial.get('retry_answer', '')),
                ('细分拼图提示', refined.get('prompt', '')),
-               ('细分拼图回答', refined.get('answer', ''))]
+               ('细分拼图回答', refined.get('answer', '')),
+               ('细分拼图重试提示', refined.get('retry_prompt', '')),
+               ('细分拼图重试回答', refined.get('retry_answer', ''))]
     for step in record.get('refinement_steps') or []:
         answers.append((f"第 {step['depth']} 层裁剪回答", step.get('answer', step.get('error', ''))))
     answer_html = '\n'.join(f'<details><summary>{escape(label)}</summary><pre>{escape(value)}</pre></details>'
                             for label, value in answers if value)
     title = f'{key} · {record["query"]}'
-    metrics = (f'类别：{category} | 候选数：原始 {len(raw)} → 初始 {len(original)} '
+    metrics = (f'类别：{category} | 最终来源：{record.get("final_source", "")} | '
+               f'初始拼图决策：{initial.get("selection_source", "")} | '
+               f'候选数：原始 {len(raw)} → 初始 {len(original)} '
                f'→ 细分后 {len(record.get("refined_boxes") or [])} | '
                f'A IoU={box_iou(a_box, gt):.3f} | '
                f'初始 F IoU={box_iou(initial["bbox"], gt) if valid_box(initial.get("bbox")) else 0:.3f} | '
@@ -264,6 +277,7 @@ def main():
     parser.add_argument('--tile-height', type=int, default=224)
     parser.add_argument('--gap', type=int, default=12)
     parser.add_argument('--max-puzzle-width', type=int, default=1536)
+    parser.add_argument('--puzzle-context-padding', type=float, default=0)
     parser.add_argument('--parent-containment', type=float, default=.9)
     parser.add_argument('--parent-min-children', type=int, default=2)
     parser.add_argument('--parent-min-area-ratio', type=float, default=1.5)
@@ -272,7 +286,8 @@ def main():
     if (args.limit < 0 or min(args.tile_height, args.max_puzzle_width,
                               args.parent_min_children) < 1 or args.gap < 0
             or not 0 < args.parent_containment <= 1 or args.parent_min_area_ratio <= 1
-            or not 0 <= args.dedup_iou <= 1):
+            or not 0 <= args.dedup_iou <= 1
+            or not 0 <= args.puzzle_context_padding <= 1):
         parser.error('Invalid numeric arguments')
     refs = load_json(args.references)
     baseline = load_json(args.baseline_predictions)

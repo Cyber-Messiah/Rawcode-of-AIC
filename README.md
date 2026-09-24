@@ -155,3 +155,33 @@ GT/A/最终 F 对照图、第一阶段原始框、去父框后的候选、去重
 裁剪图、映射回原图的子框、细分后候选和拼图。绿色表示人工答案或 IoU≥0.5
 的拼图候选，红色表示模型选择，紫色表示最终框或拼图输出。页面还保留模型原文，
 `manifest.csv` 汇总每题文件数和 IoU。人工答案只用于标记图片，不参与预测。
+
+## 带上下文的 F 与按序号直选的 G
+
+新版 `experiment_f_recursive_multi.py` 给拼图中的每个候选裁块增加默认 15% 的
+边缘上下文，但选中后仍返回**原始候选框**，不会把扩大的裁块当作答案框。
+`--puzzle-context-padding` 可调整此比例。F 若在拼图上给出多个框，或单框明显
+横跨多个拼图块，会用“只选一个黄色边框内的块”的提示重试一次；重试仍无法
+确定单块时，按 G 规则直接选对应序号。拼图无候选或候选数不足以数到目标序号时
+回退到 A。G 按候选在原图中的横坐标从左到右排序，右往左计数时从最后一块开始。
+
+G 可直接使用已经保存的 F 日志评分，无需图像、模型或 GPU：
+
+```bash
+python evaluate_g_ordinal.py --candidate-stage initial --output-dir ../outputs/ordinal_g_replay_initial
+python evaluate_g_ordinal.py --candidate-stage refined --output-dir ../outputs/ordinal_g_replay_refined
+```
+
+这两个命令使用旧版 192 题日志回放，分别得到 95/192 与 97/192 的 Acc@0.5；
+这是**旧候选框的 G 分数**，不是新上下文拼图重新推理后的 F 分数。可通过
+`--journal`、`--references`、`--baseline-predictions` 指定其他机器上的路径。
+F 新版运行时请使用新的 `--output-dir`；完整 RGB 图像路径通过 `--data-root` 指定。
+输出会记录首次拼图回答、重试回答、是否跨块，以及最终由 F、G 还是 A 决策。
+本地小规模 GPU 试跑示例：
+
+```bash
+python experiment_f_recursive_multi.py --ids 003810_001 002760_004 --data-root ../analysis/ordinal_recursive_gate_v2_20260924/rgb_complete --model-path ../LocateAnything-3B --baseline-predictions ../outputs/rgb_all/queries_rgb.json --output-dir ../outputs/ordinal_fg_context_pilot
+```
+
+可用 `visualize_ordinal_stages.py --journal <新日志> --puzzle-context-padding 0.15`
+重建新版拼图；这个参数须与推理时一致。

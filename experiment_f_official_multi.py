@@ -74,17 +74,24 @@ def deduplicate(boxes, threshold=0.5):
     return kept
 
 
-def make_puzzle(image, boxes, tile_height=224, gap=12, max_width=1536):
-    """Return puzzle, normalized tile spans, and the corresponding valid boxes."""
+def make_puzzle(image, boxes, tile_height=224, gap=12, max_width=1536,
+                context_padding=0.0):
+    """Return padded visual tiles, spans, and unchanged prediction boxes.
+
+    Padding is a fraction of each box's width/height, clipped to the image.
+    The returned boxes remain the original unpadded candidates.
+    """
     from PIL import Image, ImageDraw
 
     width, height = image.size
     tiles, used_boxes = [], []
     for box in boxes:
-        left = max(0, min(width - 1, math.floor(box[0] * width)))
-        top = max(0, min(height - 1, math.floor(box[1] * height)))
-        right = max(left + 1, min(width, math.ceil(box[2] * width)))
-        bottom = max(top + 1, min(height, math.ceil(box[3] * height)))
+        pad_x = (box[2] - box[0]) * context_padding
+        pad_y = (box[3] - box[1]) * context_padding
+        left = max(0, min(width - 1, math.floor((box[0] - pad_x) * width)))
+        top = max(0, min(height - 1, math.floor((box[1] - pad_y) * height)))
+        right = max(left + 1, min(width, math.ceil((box[2] + pad_x) * width)))
+        bottom = max(top + 1, min(height, math.ceil((box[3] + pad_y) * height)))
         crop = image.crop((left, top, right, bottom))
         tile_width = max(1, round(crop.width * tile_height / crop.height))
         if tile_width > max_width:

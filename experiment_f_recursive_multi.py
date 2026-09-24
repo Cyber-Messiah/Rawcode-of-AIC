@@ -20,6 +20,7 @@ from experiment_f_official_multi import (
     ORDINAL_WORDS, area, deduplicate, generate, intersection, load_model,
     make_puzzle, parse_boxes, remove_parent_boxes, select_tile,
 )
+from ordinal_puzzle_policy import g_choice, response_spans_multiple_tiles, sorted_candidates
 from predict_rgb_all import atomic_json, read_progress
 from prepare_ordinal_subset import parse_ordinal
 from prepare_reference_subset import load_json, sha256, valid_box
@@ -97,17 +98,22 @@ def replace_parent(active, parent, children, dedup_iou):
 
 def select_on_puzzle(image, boxes, rank, direction, target, args,
                      model, tokenizer, processor, seed, picture_path):
-    from PIL import Image
-
+    empty = dict(bbox=None, answer='', puzzle_box=None, selected_index=None,
+                 puzzle_size=None, selection_source='none', g_bbox=None, g_index=None,
+                 retry_answer='', retry_prompt='', retry_puzzle_boxes=[],
+                 ambiguous_initial=False, ambiguous_retry=False)
     if not boxes:
-        return dict(bbox=None, answer='', puzzle_box=None, selected_index=None,
-                    puzzle_size=None, status='no_candidates')
-    ordered = sorted(boxes, key=lambda box: (box[0] + box[2]) / 2)
+        return {**empty, 'status': 'no_candidates'}
+    ordered = sorted_candidates(boxes)
+    g_index, g_bbox = g_choice(ordered, rank, direction)
+    if g_index is None:
+        return {**empty, 'status': 'insufficient_candidates',
+                'candidate_count': len(ordered)}
     puzzle, spans, used = make_puzzle(image, ordered, args.tile_height,
-                                      args.gap, args.max_puzzle_width)
+                                      args.gap, args.max_puzzle_width,
+                                      args.puzzle_context_padding)
     if puzzle is None:
-        return dict(bbox=None, answer='', puzzle_box=None, selected_index=None,
-                    puzzle_size=None, status='invalid_puzzle')
+        return {**empty, 'status': 'invalid_puzzle'}
     word = ORDINAL_WORDS.get(rank, f'{rank}th')
     prompt = ('Locate a single instance that matches the following description: '
               f'the {word} {target} from {direction.replace("_", " ")} '
@@ -116,7 +122,31 @@ def select_on_puzzle(image, boxes, rank, direction, target, args,
                       args.select_max_new_tokens, seed + 1, args.temperature,
                       args.image_token_limit)
     puzzle_boxes = parse_boxes(answer)
-    selected = select_tile(puzzle_boxes[0], spans) if puzzle_boxes else None
+    ambiguous_initial = response_spans_multiple_tiles(
+        puzzle_boxes, spans, args.multi_tile_overlap)
+    retry_prompt, retry_answer, retry_boxes = '', '', []
+    ambiguous_retry = False
+    if ambiguous_initial:
+        retry_prompt = (prompt + ' The image is a row of separate yellow-bordered tiles. '
+                        'Return exactly one bounding box inside exactly one tile. '
+                        'Do not include any part of another tile or the whole row. '
+                        'Count from the stated side before choosing.')
+        retry_answer = generate(model, tokenizer, processor, puzzle, retry_prompt,
+                                args.select_max_new_tokens, seed + 2, args.temperature,
+                                args.image_token_limit)
+        retry_boxes = parse_boxes(retry_answer)
+        ambiguous_retry = response_spans_multiple_tiles(
+            retry_boxes, spans, args.multi_tile_overlap)
+    chosen_boxes = retry_boxes if ambiguous_initial else puzzle_boxes
+    if len(chosen_boxes) == 1 and not (ambiguous_retry if ambiguous_initial else ambiguous_initial):
+        selected = select_tile(chosen_boxes[0], spans)
+        selection_source = 'retry_model' if ambiguous_initial else 'model'
+    else:
+        selected = g_index
+        selection_source = 'g_multi_fallback' if ambiguous_initial else 'g_invalid_fallback'
+    if selected is None:
+        selected = g_index
+        selection_source = 'g_invalid_fallback'
     if picture_path is not None:
         marked = puzzle.copy()
         if selected is not None:
@@ -126,11 +156,14 @@ def select_on_puzzle(image, boxes, rank, direction, target, args,
             draw.rectangle((x1, 0, x2, marked.height - 1), outline='red', width=4)
         picture_path.parent.mkdir(parents=True, exist_ok=True)
         marked.save(picture_path)
-    return dict(bbox=used[selected] if selected is not None else None,
+    return dict(bbox=used[selected],
                 answer=answer, puzzle_box=puzzle_boxes[0] if puzzle_boxes else None,
                 selected_index=selected, puzzle_size=list(puzzle.size),
-                status='ok' if selected is not None else 'selection_failed', prompt=prompt,
-                candidate_count=len(used))
+                status='ok', prompt=prompt, candidate_count=len(used),
+                selection_source=selection_source, g_index=g_index, g_bbox=g_bbox,
+                retry_prompt=retry_prompt, retry_answer=retry_answer,
+                retry_puzzle_boxes=retry_boxes,
+                ambiguous_initial=ambiguous_initial, ambiguous_retry=ambiguous_retry)
 
 
 def infer_one(key, item, baseline_box, args, model, tokenizer, processor):
@@ -152,13 +185,15 @@ def infer_one(key, item, baseline_box, args, model, tokenizer, processor):
     initial = select_on_puzzle(image, active, rank, direction, target, args,
                                model, tokenizer, processor, seed,
                                args.output_dir / 'puzzles_initial' / f'{key}.png' if active else None)
+    initial_source = ('original_g' if initial['selection_source'].startswith('g_')
+                      else 'original_f')
     result = dict(id=key, status=initial['status'], bbox=initial['bbox'],
                   query=item['query'], visible=item['visible'], rank=rank,
                   direction=direction, target=target, multi_prompt=multi_prompt,
                   multi_answer=multi_answer, raw_boxes=raw, original_boxes=active,
                   original_selection=initial, refinement_steps=[],
                   refined_boxes=active, refined_selection=None,
-                  final_source='original_f')
+                  final_source=initial_source)
     if not raw:
         if valid_box(baseline_box):
             result.update(status='fallback_a_none', bbox=baseline_box, final_source='a_none')
@@ -215,7 +250,12 @@ def infer_one(key, item, baseline_box, args, model, tokenizer, processor):
                                    args.output_dir / 'puzzles_refined' / f'{key}.png')
         result['refined_selection'] = refined
         if valid_box(refined['bbox']):
-            result.update(status='ok', bbox=refined['bbox'], final_source='refined_f')
+            refined_source = ('refined_g' if refined['selection_source'].startswith('g_')
+                              else 'refined_f')
+            result.update(status='ok', bbox=refined['bbox'], final_source=refined_source)
+    if not valid_box(result['bbox']) and valid_box(baseline_box):
+        result.update(status='fallback_a_puzzle', bbox=baseline_box,
+                      final_source='a_puzzle')
     return result
 
 
@@ -224,7 +264,8 @@ def summarize(rows, references, records, baseline, output):
     for key, item in rows:
         reference = references[key]['bbox']
         record = records.get(key, {})
-        final_box = record.get('bbox') if record.get('status') in ('ok', 'fallback_a_none') else None
+        final_box = record.get('bbox') if record.get('status') in (
+            'ok', 'fallback_a_none', 'fallback_a_puzzle') else None
         initial_box = record.get('original_selection', {}).get('bbox')
         refined = record.get('refined_selection') or {}
         baseline_box = baseline.get(key, {}).get('bbox')
@@ -243,6 +284,10 @@ def summarize(rows, references, records, baseline, output):
                             refined_gt_hit=any(score(b) >= .5 for b in refined_boxes),
                             initial_f_iou=score(initial_box), refined_f_iou=score(refined.get('bbox')),
                             final_iou=score(final_box), a_iou=score(baseline_box),
+                            initial_source=record.get('original_selection', {}).get('selection_source', ''),
+                            refined_source=refined.get('selection_source', ''),
+                            retry_calls=sum(bool(s.get('retry_answer')) for s in
+                                            (record.get('original_selection', {}), refined)),
                             error=record.get('error', '')))
     total = len(details)
     processed = sum(row['status'] != 'pending' for row in details)
@@ -257,6 +302,10 @@ def summarize(rows, references, records, baseline, output):
                    explicit_none=sum('<box>None</box>' in records.get(key, {}).get('multi_answer', '')
                                      for key, _ in rows),
                    a_none_fallbacks=sum(row['final_source'] == 'a_none' for row in details),
+                   a_puzzle_fallbacks=sum(row['final_source'] == 'a_puzzle' for row in details),
+                   g_fallbacks=sum(row['final_source'] in ('original_g', 'refined_g')
+                                   for row in details),
+                   selection_retries=sum(row['retry_calls'] for row in details),
                    refinement_triggered=sum(row['refinement_calls'] > 0 for row in details),
                    refinement_calls=sum(row['refinement_calls'] for row in details),
                    refinement_accepted=sum(row['successful_refinements'] for row in details),
@@ -292,7 +341,7 @@ def main():
     parser.add_argument('--data-root', type=Path, default=root / 'datasets/reference_subset')
     parser.add_argument('--model-path', type=Path, default=root / 'LocateAnything-3B')
     parser.add_argument('--baseline-predictions', type=Path, required=True)
-    parser.add_argument('--output-dir', type=Path, default=root / 'outputs/ordinal_f_recursive')
+    parser.add_argument('--output-dir', type=Path, default=root / 'outputs/ordinal_fg_context')
     parser.add_argument('--ids', nargs='*', default=None)
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--seed', type=int, default=42)
@@ -307,6 +356,8 @@ def main():
     parser.add_argument('--tile-height', type=int, default=224)
     parser.add_argument('--gap', type=int, default=12)
     parser.add_argument('--max-puzzle-width', type=int, default=1536)
+    parser.add_argument('--puzzle-context-padding', type=float, default=0.15)
+    parser.add_argument('--multi-tile-overlap', type=float, default=0.25)
     parser.add_argument('--max-depth', type=int, default=3)
     parser.add_argument('--single-area-threshold', type=float, default=0.10)
     parser.add_argument('--multi-area-threshold', type=float, default=0.10)
@@ -332,7 +383,9 @@ def main():
             or not 0 < args.a_containment <= 1 or not 0 < args.parent_containment <= 1
             or not 0 < args.child_max_area_ratio < 1
             or not 0 < args.child_min_containment <= 1
-            or not 0 <= args.dedup_iou <= 1 or not 0 <= args.crop_padding <= 0.2):
+            or not 0 <= args.dedup_iou <= 1 or not 0 <= args.crop_padding <= 0.2
+            or not 0 <= args.puzzle_context_padding <= 1
+            or not 0 < args.multi_tile_overlap <= 1):
         parser.error('Invalid numeric arguments')
     queries, references = load_json(args.queries), load_json(args.references)
     baseline = load_json(args.baseline_predictions)
@@ -376,7 +429,8 @@ def main():
                           'seed','temperature','image_token_limit','multi_max_new_tokens',
                           'select_max_new_tokens','parent_containment','parent_min_children',
                           'parent_min_area_ratio','dedup_iou','tile_height','gap',
-                          'max_puzzle_width','max_depth','single_area_threshold',
+                          'max_puzzle_width','puzzle_context_padding','multi_tile_overlap',
+                          'max_depth','single_area_threshold',
                           'multi_area_threshold','relative_area_ratio','a_area_ratio',
                           'a_containment','a_min_area_threshold',
                           'recursive_global_area_threshold','child_max_area_ratio',
@@ -393,8 +447,8 @@ def main():
         model = tokenizer = processor = None
         with (args.output_dir / 'predictions.jsonl').open('a', encoding='utf-8') as stream:
             for index, (key, item) in enumerate(rows, 1):
-                if records.get(key, {}).get('status') in ('ok','fallback_a_none','no_candidates',
-                                                           'selection_failed','invalid_puzzle'):
+                if records.get(key, {}).get('status') in (
+                    'ok', 'fallback_a_none', 'fallback_a_puzzle'):
                     continue
                 if model is None:
                     model, tokenizer, processor = load_model(args.model_path, args.image_token_limit)
