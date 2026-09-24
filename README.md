@@ -186,3 +186,7 @@ python experiment_f_recursive_multi.py --ids 003810_001 002760_004 --data-root .
 
 可用 `visualize_ordinal_stages.py --journal <新日志> --puzzle-context-padding 0.025`
 重建新版拼图；这个参数须与推理时一致。
+
+## G′ 候选改进
+
+大框再细分、同类候选补搜、G 评分与 A/G/G′ 可视化的完整流程见 [G_EXPERIMENTS.md](G_EXPERIMENTS.md)。模型、数据和运行结果均保留在本机或云机的仓库外目录。

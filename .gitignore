@@ -1,3 +1,10 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# Local inputs and generated inference artifacts, if created inside this repo.
+/datasets/
+/models/
+/LocateAnything-3B/
+/outputs/
+/analysis/
