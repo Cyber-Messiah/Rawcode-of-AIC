@@ -85,3 +85,52 @@ temperature 0.7、top-p 0.9、最多一次 temperature 0.2 的重试。
 输出目录有 `run.lock` 时表示有进程占用；强制终止后确认旧进程已停止再移除锁。
 
 测试：`python -m unittest discover -p 'test_*.py'`。
+
+## v2：复赛全量 RGB，序数题使用 G
+
+`predict_bbox_v2.py` 是独立入口；上面的 `predict_bbox.py`（v1）保持原样。
+v2 对每一道题先运行原单框 A 提示词。仅当题目含**唯一明确的水平序数**
+（如 `third ... from left to right`）时，再运行官方多框提示词，去父框、去重，
+对异常大框最多递归细分 3 次，按候选框中心的左右顺序直接选第 N 个，作为 G。
+G 没有足够候选框或多框调用失败时回退 A。其他题保持 A。
+v2 不需要人工答案，也不调用拼图重定位模型；因此这里的“G”指直接选取
+经整理后的第 N 个候选框，和初赛实验中的 G 决策一致。
+
+**坐标修复：**原 v1 在解析时直接要求 `x2>x1`、`y2>y1`，还只接受整数。
+v2 把模型返回的四个值先作为两个角，分别取横纵坐标的最小值和最大值，
+然后检查是否为非零面积的合法框。被交换的角会计入 `reversed_corners`，
+不会直接记为失败。官方 `<box><x1><y1><x2><y2></box>` 坐标按 0–1000
+量化单位换算；普通括号中的 0–1 小数保持原样；大于 1000 的普通坐标仅在
+能依据图像尺寸解释为像素时换算。最终提交仍使用 0–1 的 `xyxy` 顺序。
+零面积、负值和无法确定单位的框仍会被拒绝，详情在逐题记录的 `*_audit` 中。
+
+在仓库目录执行（替换实际路径）：
+
+```bash
+# 只有 queries.json、暂时没有 RGB 图片时，可先检查题目路由
+python predict_bbox_v2.py --data-root /path/to/final_dataset \
+  --queries /path/to/queries.json --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/v2_check --check-only --skip-image-check
+
+# GPU 小测：先专门选 5 道明确的水平序数题，核对 G 过程
+python predict_bbox_v2.py --data-root /path/to/final_dataset \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/v2_ordinal_pilot --only-ordinals --limit 5
+
+# 复赛全量；不要加 --limit 或 --only-ordinals
+python predict_bbox_v2.py --data-root /path/to/final_dataset \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/v2_full
+```
+
+如果查询文件不在数据根目录的 `queries/queries.json` 或 `queries.json`，
+以上后两条也要加 `--queries /path/to/queries.json`。RTX 6000D 环境安装
+仍按本页开头的步骤；本地 5060 可做小测。实际运行前应检查 RGB 文件存在。
+
+`summary.json` 中的 `ordinal_queries` 是路由到 G 的题数，`sources` 分别统计
+`a`、`g_initial`、`g_refined`、`a_ordinal_fallback`；`reversed_corner_boxes`
+统计被规范化的 A/首轮多框原始框数。`predictions.jsonl` 保留原始回答、
+解析审计、候选框和递归步骤，方便核查坐标问题。只有
+`submission_ready: true` 且 `total_queries` 等于完整题量时，才使用
+`submission_complete.json`。小测输出目录与全量目录必须分开。
+中断后可用同一命令和目录续跑；修改参数或脚本后换新目录。
