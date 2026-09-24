@@ -115,8 +115,8 @@ A/F 对错交叉统计。`queries_f.json` 仅收录成功预测的框，可再�
 至少 1.75 倍。例外是候选框至少占整图 2%、覆盖 A 框至少 90%，
 且面积至少为 A 框 3 倍。递归后续层只继续细分仍占原图至少 10% 的框，
 避免小框在裁剪图中显得巨大。阈值依据第一轮 192 题的逐题记录收紧：
-4 道被细分改错的框均占整图约 3%–5%。用已保存的推理结果离线回放，
-新门控预计减少触发次数，并把正确数从 76 提至 79；仍须重新推理验证。
+4 道被细分改错的框均占整图约 3%–5%。新版在 192 道初赛有答案序数题上
+实测 79/192 Acc@0.5，细分新增 2 道正确题、未改错原本正确的题。
 
 ```bash
 python experiment_f_recursive_multi.py --baseline-predictions ../outputs/rgb_all/queries_rgb.json --check-only
@@ -129,3 +129,29 @@ python experiment_f_recursive_multi.py --baseline-predictions ../outputs/rgb_all
 输出 `summary.json` 同时报告原始 F、递归后最终预测与 A 的 IoU/Acc@0.5，
 以及新找回/丢失的正确候选数；`predictions.jsonl` 保存每层提示、原始回答、
 映射回原图的子框。`puzzles_initial/` 和 `puzzles_refined/` 分别保存选择拼图。
+
+## 本地查看 A/F 同错题的各阶段图
+
+先把云端递归实验的 `predictions.jsonl` 和对应的**完整 RGB 原图**下载到本地。
+当前工作区原有的部分 RGB 文件被截断，因此本次使用
+`../analysis/ordinal_recursive_gate_v2_20260924/rgb_complete` 中补齐的 30 张图。
+以下命令只读取日志、人工答案和 RGB 图像，不加载模型或调用 GPU。
+默认筛选 A 与最终 F 都错，
+但 F 原始多框属于以下三类的 45 题：17 题已有准确候选、19 题大框覆盖答案、
+9 题仅部分覆盖或偏移。路径可用参数替换。
+
+```bash
+python visualize_ordinal_stages.py --list-only
+python visualize_ordinal_stages.py --journal ../analysis/ordinal_recursive_gate_v2_20260924/predictions.jsonl --output-dir ../outputs/ordinal_stage_review_45
+python visualize_ordinal_stages.py --ids 003810_001 002760_004 --output-dir ../outputs/ordinal_stage_review_examples
+```
+
+如果完整图像保存在其它目录，传入 `--data-root`。脚本发现图片无法完整解码时
+会报错，不会用截断图片制作核查图。
+
+打开输出目录的 `index.html`，可按三类浏览。每题分别生成无标注 RGB 原图、
+GT/A/最终 F 对照图、第一阶段原始框、去父框后的候选、去重后的候选、
+重建的初始拼图；发生细分时还生成每层
+裁剪图、映射回原图的子框、细分后候选和拼图。绿色表示人工答案或 IoU≥0.5
+的拼图候选，红色表示模型选择，紫色表示最终框或拼图输出。页面还保留模型原文，
+`manifest.csv` 汇总每题文件数和 IoU。人工答案只用于标记图片，不参与预测。
