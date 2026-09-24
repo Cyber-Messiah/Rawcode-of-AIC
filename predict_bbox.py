@@ -4,12 +4,12 @@ import argparse
 import gc
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import random
-import re
 import time
+
+from bbox_coordinates import parse_boxes, valid_box
 
 
 def atomic_json(path, value):
@@ -23,23 +23,10 @@ def atomic_json(path, value):
     os.replace(temporary, path)
 
 
-def valid_box(box):
-    return (isinstance(box, list) and len(box) == 4
-            and all(type(value) in (int, float) and math.isfinite(value)
-                    and 0 <= value <= 1 for value in box)
-            and box[0] < box[2] and box[1] < box[3])
-
-
-def parse_box(answer):
-    for match in re.finditer(r'<box>(.*?)</box>', answer, re.S):
-        body = match.group(1).strip()
-        found = (re.fullmatch(r'<(\d+)>\s*<(\d+)>\s*<(\d+)>\s*<(\d+)>', body)
-                 or re.fullmatch(r'\(?\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)?', body))
-        if found:
-            box = [int(value) / 1000 for value in found.groups()]
-            if valid_box(box):
-                return box
-    return None
+def parse_box(answer, image_size=None):
+    """Read the first usable model box, including reversed corner pairs."""
+    boxes, _ = parse_boxes(answer, image_size)
+    return boxes[0] if boxes else None
 
 
 def read_progress(path):
@@ -167,7 +154,7 @@ def make_predictor(args):
     processor.tokenizer = tokenizer
 
     def predict(index, key, item):
-        answer, errors = '', []
+        answer, errors, audit = '', [], {}
         processor.image_processor.in_token_limit = args.image_token_limit
         for attempt in range(args.retries + 1):
             inputs = generated = None
@@ -200,10 +187,11 @@ def make_predictor(args):
                 answer = generated[0] if isinstance(generated, tuple) else generated
                 if not isinstance(answer, str):
                     answer = tokenizer.batch_decode(answer, skip_special_tokens=False)[0]
-                box = parse_box(answer)
-                if box is not None:
-                    return dict(status='ok', bbox=box, answer=answer, attempts=attempt + 1,
-                                image_token_limit=processor.image_processor.in_token_limit)
+                boxes, audit = parse_boxes(answer, image.size)
+                if boxes:
+                    return dict(status='ok', bbox=boxes[0], answer=answer, attempts=attempt + 1,
+                                image_token_limit=processor.image_processor.in_token_limit,
+                                parse_audit=audit)
                 errors.append('No valid bbox in model output')
             except torch.cuda.OutOfMemoryError:
                 errors.append('CUDA out of memory')
@@ -215,7 +203,8 @@ def make_predictor(args):
                 inputs = generated = None
                 gc.collect()
                 torch.cuda.empty_cache()
-        return dict(status='error', bbox=None, answer=answer, errors=errors)
+        return dict(status='error', bbox=None, answer=answer, errors=errors,
+                    parse_audit=audit)
 
     return predict
 

@@ -16,13 +16,10 @@ import random
 import re
 import time
 
+from bbox_coordinates import parse_boxes
 from predict_bbox import atomic_json, find_queries, read_progress, valid_box
 
 
-BOX = re.compile(r'<box>(.*?)</box>', re.I | re.S)
-NUMBER = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
-TAGGED = re.compile(r'\s*' + r'\s*'.join(fr'<({NUMBER})>' for _ in range(4)) + r'\s*')
-PLAIN = re.compile(r'\s*[\[(]?\s*' + r'\s*,\s*'.join(fr'({NUMBER})' for _ in range(4)) + r'\s*[\])]??\s*')
 DIRECTION = re.compile(r'\b(left\s+to\s+right|right\s+to\s+left)\b', re.I)
 ORDER_PHRASE = re.compile(r'\b(?:from\s+(?:the\s+)?)?(?:left\s+to\s+right|right\s+to\s+left)\b', re.I)
 VERTICAL = re.compile(r'\b(?:top\s+to\s+bottom|bottom\s+to\s+top)\b', re.I)
@@ -46,66 +43,6 @@ def parse_ordinal(query):
     target = re.sub(r'^(?:count|number)\s+(?:the\s+)?', '', target, flags=re.I).strip()
     target = re.sub(r'^(?:(?:from|the|a|an)\s+)+', '', target, flags=re.I).strip()
     return (rank, direction, target) if target else None
-
-
-def parse_boxes(answer, image_size=None):
-    """Return valid boxes and a parse audit; never silently clip or double-scale.
-
-    Tagged coordinates are LocateAnything's 0..1000 units. Plain coordinates
-    in 0..1 are normalized; otherwise 0..1000 are model units. Values above
-    1000 can only be interpreted as pixels when image dimensions permit it.
-    """
-    boxes, audit = [], dict(box_tags=0, accepted=0, reversed_corners=0,
-                            units=Counter(), rejected=Counter(), explicit_none=0)
-    for match in BOX.finditer(str(answer)):
-        audit['box_tags'] += 1
-        body = match.group(1).strip()
-        if body.lower() in ('none', 'null'):
-            audit['explicit_none'] += 1
-            continue
-        tagged = TAGGED.fullmatch(body)
-        found = tagged or PLAIN.fullmatch(body)
-        if not found:
-            audit['rejected']['syntax'] += 1
-            continue
-        numbers = [float(v) for v in found.groups()]
-        if any(not math.isfinite(v) or v < 0 for v in numbers):
-            audit['rejected']['nonfinite_or_negative'] += 1
-            continue
-        if tagged:
-            unit = 'model_1000'
-            if any(v > 1000 for v in numbers):
-                audit['rejected']['tagged_out_of_range'] += 1
-                continue
-        elif all(v <= 1 for v in numbers):
-            unit = 'normalized'
-        elif all(v <= 1000 for v in numbers):
-            unit = 'model_1000'
-        elif (image_size and image_size[0] > 0 and image_size[1] > 0
-              and numbers[0] <= image_size[0] and numbers[2] <= image_size[0]
-              and numbers[1] <= image_size[1] and numbers[3] <= image_size[1]):
-            unit = 'pixel'
-        else:
-            audit['rejected']['out_of_range_or_ambiguous_pixels'] += 1
-            continue
-        if unit == 'model_1000':
-            values = [v / 1000.0 for v in numbers]
-        elif unit == 'pixel':
-            values = [numbers[i] / image_size[i % 2] for i in range(4)]
-        else:
-            values = numbers
-        reversed_corners = values[0] > values[2] or values[1] > values[3]
-        box = [min(values[0], values[2]), min(values[1], values[3]),
-               max(values[0], values[2]), max(values[1], values[3])]
-        if not valid_box(box):
-            audit['rejected']['degenerate_or_out_of_range'] += 1
-            continue
-        boxes.append(box)
-        audit['accepted'] += 1
-        audit['reversed_corners'] += int(reversed_corners)
-        audit['units'][unit] += 1
-    audit['units'], audit['rejected'] = dict(audit['units']), dict(audit['rejected'])
-    return boxes, audit
 
 
 def area(box):

@@ -44,7 +44,15 @@ class PredictionTests(unittest.TestCase):
     def test_parser_and_input_validation(self):
         self.assertEqual(parse_box('<box><100><200><300><400></box>'), [.1, .2, .3, .4])
         self.assertEqual(parse_box('<box>(100,200,300,400)</box>'), [.1, .2, .3, .4])
-        self.assertIsNone(parse_box('<box><300><200><100><400></box>'))
+        self.assertEqual(parse_box('<box><300><200><100><400></box>'), [.1, .2, .3, .4])
+        self.assertEqual(parse_box('<box><418><685><498><607></box>'),
+                         [.418, .607, .498, .685])
+        self.assertEqual(parse_box('<box><288><388><272><444></box>'),
+                         [.272, .388, .288, .444])
+        self.assertEqual(parse_box('<box>(0.8,0.7,0.2,0.1)</box>'),
+                         [.2, .1, .8, .7])
+        self.assertIsNone(parse_box('<box>None</box>'))
+        self.assertIsNone(parse_box('<box><300><200><300><400></box>'))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / 'queries.json').write_text(json.dumps({'a': {'query': 'x', 'visible': '../outside.png'}}))
