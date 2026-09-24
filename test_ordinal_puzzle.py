@@ -33,6 +33,8 @@ class OrdinalPuzzleTests(unittest.TestCase):
                          (1, 'right_to_left', 'planter'))
         self.assertEqual(parse_ordinal('The first deer from the left, when counting from left to right.'),
                          (1, 'left_to_right', 'deer'))
+        self.assertEqual(parse_ordinal('Count the second tiger from right to left'),
+                         (2, 'right_to_left', 'tiger'))
 
     def test_official_multi_answer_parent_and_duplicate_cleanup(self):
         answer = ('<ref>stone pier</ref><box><100><100><400><400></box>'

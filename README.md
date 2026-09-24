@@ -104,3 +104,25 @@ A/F 对错交叉统计。`queries_f.json` 仅收录成功预测的框，可再�
 独立核对分数。所有失败和缺失均按参考题总数计 0，不会偷用 GT 选择候选。
 若只需对照已有的全量 A 预测，可把 `--baseline-predictions` 指向原来的
 `../outputs/rgb_all/queries_rgb.json`；记录并比较两边实际使用的图像预算。
+
+## 递归细分大框（独立实验）
+
+`experiment_f_recursive_multi.py` 保留上面的 F 脚本不变。它先记录原始 F
+选择；当多框结果出现疑似大区域时，在该区域内再次使用官方多实例提示，
+最多细分 3 层。每层只接受面积至少缩小 20% 的子框，父框留作原始分支备用，
+不会和子框一起放入计数拼图。首次无候选框时直接采用 A 框。
+触发规则：单框占当前图像面积至少 5%；多框时最大框占至少 1.5%，
+且为第二大框的至少 1.75 倍；也可由包含且面积至少为 A 框 3 倍触发。
+这些阈值在 192 道序数题上校准，需要通过独立实验验证实际收益。
+
+```bash
+python experiment_f_recursive_multi.py --baseline-predictions ../outputs/rgb_all/queries_rgb.json --check-only
+python experiment_f_recursive_multi.py --baseline-predictions ../outputs/rgb_all/queries_rgb.json --ids 000023_001 002760_002 002683_001 --output-dir ../outputs/ordinal_f_recursive_pilot
+python experiment_f_recursive_multi.py --baseline-predictions ../outputs/rgb_all/queries_rgb.json --output-dir ../outputs/ordinal_f_recursive_full
+```
+
+在其它机器上给 `--queries`、`--references`、`--data-root`、`--model-path`
+传入实际路径。每次运行用独立 `--output-dir`；相同命令可以续跑。
+输出 `summary.json` 同时报告原始 F、递归后最终预测与 A 的 IoU/Acc@0.5，
+以及新找回/丢失的正确候选数；`predictions.jsonl` 保存每层提示、原始回答、
+映射回原图的子框。`puzzles_initial/` 和 `puzzles_refined/` 分别保存选择拼图。

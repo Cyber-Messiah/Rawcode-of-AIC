@@ -42,6 +42,7 @@ def parse_ordinal(query):
                     ' ', target, flags=re.I)
     target = re.sub(r'[(),;:.]+', ' ', target)
     target = re.sub(r'\s+', ' ', target).strip()
+    target = re.sub(r'^(?:count|number)\s+(?:the\s+)?', '', target, flags=re.I).strip()
     target = re.sub(r'^(?:(?:from|the|a|an)\s+)+', '', target, flags=re.I).strip()
     if not target:
         return None
