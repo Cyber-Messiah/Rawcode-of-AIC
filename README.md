@@ -140,3 +140,45 @@ python predict_bbox_v2.py --data-root /path/to/final_dataset \
 `submission_ready: true` 且 `total_queries` 等于完整题量时，才使用
 `submission_complete.json`。小测输出目录与全量目录必须分开。
 中断后可用同一命令和目录续跑；修改参数或脚本后换新目录。
+
+## G′：复赛全量 RGB 实验版
+
+`predict_bbox_gprime.py` 是一个完整的复赛推理入口。它先按 v2 产生 A 与初始 G；
+然后对仍横跨原图至少 80% 宽度的序数候选框执行“单个实例”重定位及重叠横向裁图。
+只有得到至少两个明显小于父框的有效子框、且候选数足以选择题目序号时，才替换大框。
+同图同目标的序数题共享补搜：候选数不足最大序号时，换提示词搜索整图、上下文带和
+未覆盖的横向区域，最后尝试 ±8% 亮度与略高温度。新框必须在至少两次独立调用中
+出现并通过尺寸门槛。最终按左右位置直接选第 N 个；不足时回退该题原 A 框。
+其余题仍使用 A。默认不启用 `--probe-complete`，以免已有足够候选的题因补搜而改序。
+
+这套门控、提示词和默认参数取自初赛 G′ 的 `experiment_g_wide_refine.py` 与
+`experiment_g_candidate_recall.py`。脚本不读取人工标注，也不产生“复赛准确率”；
+初赛参考集的得分不能当作复赛得分。与 v2 一样，仅识别唯一明确的水平序数格式。
+
+在仓库目录运行，路径按机器实际情况替换。先检查，再用不同输出目录小测，最后全量：
+
+```bash
+python predict_bbox_gprime.py \
+  --data-root /path/to/final_dataset --queries /path/to/queries.json \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/gprime_check --check-only
+
+python predict_bbox_gprime.py \
+  --data-root /path/to/final_dataset --queries /path/to/queries.json \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/gprime_ordinal_pilot --only-ordinals --limit 5
+
+python predict_bbox_gprime.py \
+  --data-root /path/to/final_dataset --queries /path/to/queries.json \
+  --model-path /path/to/LocateAnything-3B \
+  --output-dir /path/to/gprime_full
+```
+
+输出目录中的 `predictions.jsonl` 是最终逐题日志；`_initial_g/` 是中间 A＋G 日志，
+其中的提交文件只是中间结果。最终提交只使用**输出目录根层**的
+`submission_complete.json`。`summary.json` 须显示 `submission_ready: true`、
+`total_queries` 等于当前复赛 query 总数、`fallback_boxes: 0`。
+脚本逐题保存结果，可用相同命令和输出目录续跑；改变参数、模型、数据或脚本版本时
+另设输出目录。`--fallback-full-image` 只用于确有无法生成框的题，优先检查
+`failures.json`。更多门控与模型调用细节保存在每题的
+`wide_refinement_steps`、`recall` 和 `gprime_boxes` 中。

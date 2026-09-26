@@ -156,7 +156,7 @@ def make_generator(args):
     processor = AutoProcessor.from_pretrained(args.model_path, trust_remote_code=True)
     processor.tokenizer = tokenizer
 
-    def generate(image, prompt, seed, max_tokens, token_limit):
+    def generate(image, prompt, seed, max_tokens, token_limit, temperature=None):
         random.seed(seed)
         np.random.seed(seed % (2 ** 32))
         torch.manual_seed(seed)
@@ -177,7 +177,8 @@ def make_generator(args):
                     image_grid_hws=torch.as_tensor(inputs['image_grid_hws'], device='cuda'),
                     tokenizer=tokenizer, use_cache=True, max_new_tokens=max_tokens,
                     generation_mode='hybrid', do_sample=True,
-                    temperature=args.temperature, top_p=args.top_p, repetition_penalty=1.1)
+                    temperature=args.temperature if temperature is None else temperature,
+                    top_p=args.top_p, repetition_penalty=1.1)
             return answer_text(generated, tokenizer)
         finally:
             del inputs, generated
@@ -193,7 +194,7 @@ def infer(index, key, item, args, generate):
     with Image.open(args.data_root / item['visible']) as opened:
         image = opened.convert('RGB')
     ordinal = parse_ordinal(item['query'])
-    result = dict(status='error', bbox=None, source='none', ordinal=bool(ordinal),
+    result = dict(status='error', bbox=None, a_bbox=None, source='none', ordinal=bool(ordinal),
                   a_answer='', a_audit={}, a_errors=[])
     a_prompt = 'Locate a single instance that matches the following description: ' + item['query']
     a_token_limit = args.image_token_limit
@@ -204,7 +205,8 @@ def infer(index, key, item, args, generate):
             boxes, audit = parse_boxes(answer, image.size)
             result.update(a_answer=answer, a_audit=audit)
             if boxes:
-                result.update(status='ok', bbox=boxes[0], source='a', a_attempts=attempt + 1)
+                result.update(status='ok', bbox=boxes[0], a_bbox=boxes[0],
+                              source='a', a_attempts=attempt + 1)
                 break
             result['a_errors'].append('no_valid_bbox')
         except Exception as exc:
